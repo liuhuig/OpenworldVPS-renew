@@ -859,11 +859,11 @@ def check_and_handle_vps_status(page) -> str:
             if not clicked:
                 print("   ⚠️ 未能点击 Start 按钮")
 
-            print("   ⏳ 等待服务器后台启动任务处理（最长等待 30 秒）...")
-            # 轮询等待后台启动 Job 完成 (最长等待 30 秒)
+            print("   ⏳ 等待服务器后台启动任务处理（最长等待 50 秒）...")
+            # 轮询等待后台启动 Job 完成 (最长等待 50 秒，每 8 秒刷新检测一次)
             job_start_time = time.time()
-            while time.time() - job_start_time < 30:
-                time.sleep(4)
+            while time.time() - job_start_time < 50:
+                time.sleep(8)
                 try:
                     page.reload(wait_until="domcontentloaded", timeout=15000)
                     wait_for_cloudflare(page)
