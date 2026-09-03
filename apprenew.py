@@ -855,7 +855,7 @@ def check_and_handle_vps_status(page) -> str:
             return "服务器状态：重启成功，正常（Running）"
         else:
             print("   ❌ 重试 3 次后服务器依然处于 Stopped 状态")
-            return "服务器状态：停止（Stopped）请登录检查"
+            return "服务器状态：重启失败，停止（Stopped）请登录检查"
     else:
         return "服务器状态：正常（Running）"
 
