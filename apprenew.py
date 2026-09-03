@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 
 import os
+# 静默 ONNX Runtime 底层 C++ 的设备扫描 Warning 日志
+os.environ["ORT_LOGGING_LEVEL"] = "3"
 import re
 import sys
 import json
@@ -761,6 +763,103 @@ def get_vps_urls(page) -> list:
     return vps_urls
 
 
+def get_vps_status(page) -> str:
+    """
+    获取 VPS 页面服务器状态。
+    返回值: 'running', 'stopped', 'suspended', 'unknown'
+    """
+    try:
+        status_elem = page.locator("#vpsStatusLabel, #vpsStatusPill").first
+        if status_elem.count() > 0:
+            data_status = (status_elem.get_attribute("data-status") or "").lower().strip()
+            text_status = (status_elem.text_content() or "").lower().strip()
+            if "running" in data_status or "running" in text_status:
+                return "running"
+            if "suspended" in data_status or "suspended" in text_status:
+                return "suspended"
+            if "stopped" in data_status or "stopped" in text_status:
+                return "stopped"
+    except Exception:
+        pass
+
+    try:
+        page_text = page.locator("body").inner_text().lower()
+        if "suspended" in page_text:
+            return "suspended"
+        if "stopped" in page_text and "running" not in page_text:
+            return "stopped"
+        if "running" in page_text:
+            return "running"
+    except Exception:
+        pass
+
+    return "running"
+
+
+def check_and_handle_vps_status(page) -> str:
+    """
+    检测 VPS 服务器状态并处理 Stopped 状态自动重启逻辑。
+    返回用于 TG 通知的文本行。
+    """
+    initial_status = get_vps_status(page)
+    print(f"📊 检测到服务器初始状态: '{initial_status}'")
+
+    if initial_status == "running":
+        return "服务器状态：正常（Running）"
+    elif initial_status == "suspended":
+        return "服务器状态：暂停使用（Suspended）"
+    elif initial_status == "stopped":
+        print("⚠️ 服务器处于 Stopped 状态，准备自动尝试启动...")
+        restarted_ok = False
+
+        for start_attempt in range(1, 4):  # 一共重试 3 次
+            print(f"   🚀 [第 {start_attempt}/3 次尝试] 点击 Start 按钮启动服务器...")
+            clicked = False
+            start_selectors = [
+                "#btnStart",
+                "button:has-text('Start')",
+                "form[action*='/action/start'] button",
+            ]
+            for sel in start_selectors:
+                try:
+                    btn = page.locator(sel).first
+                    if btn.is_visible(timeout=3000):
+                        btn.click()
+                        clicked = True
+                        print(f"   ✅ 已点击 Start 按钮 (选择器: {sel})")
+                        break
+                except Exception:
+                    continue
+
+            if not clicked:
+                print("   ⚠️ 未能点击 Start 按钮")
+
+            print("   ⏳ 等待 15 秒钟供服务器启动...")
+            time.sleep(15)
+
+            print("   🔄 刷新页面重新检测服务器状态...")
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=30000)
+                wait_for_cloudflare(page)
+            except Exception as e:
+                print(f"   ⚠️ 刷新页面异常: {e}")
+
+            new_status = get_vps_status(page)
+            print(f"   📊 刷新后服务器状态: '{new_status}'")
+            if new_status == "running":
+                restarted_ok = True
+                print("   🎉 服务器成功重启为 Running 状态！")
+                break
+
+        if restarted_ok:
+            return "服务器状态：重启成功，正常（Running）"
+        else:
+            print("   ❌ 重试 3 次后服务器依然处于 Stopped 状态")
+            return "服务器状态：停止（Stopped）请登录检查"
+    else:
+        return "服务器状态：正常（Running）"
+
+
 def main():
     print("#" * 50)
     print("   Openworld VPS 自动续期脚本")
@@ -855,6 +954,13 @@ def main():
                 print("✅ 已成功到达目标 VPS 页面")
                 save_screenshot(page, f"vps_page_loaded_{idx}")
 
+                # ========== 检查服务器状态与自动重启 ==========
+                status_text_tg = check_and_handle_vps_status(page)
+                print(f"📌 {status_text_tg}")
+
+                # 重新读取页面内容以获取最新天数
+                page_text = page.locator("body").inner_text()
+
                 # ========== 检查剩余天数 ==========
                 match = re.search(r"[Rr]enews?\s+in\s+(\d+)\s+days?", page_text)
 
@@ -865,7 +971,7 @@ def main():
                     if days_left > RENEW_THRESHOLD_DAYS:
                         msg = f"⏳ 剩余 {days_left} 天 > {RENEW_THRESHOLD_DAYS} 天阈值，跳过续期"
                         print(msg)
-                        send_telegram_message(f"ℹ️ Openworld VPS 无需续期\n实例: {target_url}\n剩余时间: {days_left} 天")
+                        send_telegram_message(f"ℹ️ Openworld VPS 无需续期\n实例: {target_url}\n{status_text_tg}\n剩余时间: {days_left} 天")
                         continue
                     else:
                         print(f"⚠️ 剩余 {days_left} 天 ≤ {RENEW_THRESHOLD_DAYS} 天，开始执行续期...")
@@ -885,13 +991,13 @@ def main():
                     # 计算续期后的到期时间（当前时间 + 6天）
                     expiry_time = datetime.now(timezone(timedelta(hours=8))) + timedelta(days=6)
                     expiry_str = expiry_time.strftime("%Y-%m-%d %H:%M:%S") + " (GMT+8)"
-                    msg = f"✅ Openworld VPS 续期成功！\n实例: {target_url}\n天数已更新为 6 天\n续期至: {expiry_str}"
-                    print(f"✅ 续期成功！天数已更新为 6 天")
+                    msg = f"✅ Openworld VPS 续期成功！\n实例: {target_url}\n{status_text_tg}\n天数已从 {days_left} 天更新为 6 天\n续期至: {expiry_str}"
+                    print(f"✅ 续期成功！天数已从 {days_left} 天更新为 6 天")
                     print(f"📅 续期至: {expiry_str}")
                     send_telegram_message(msg)
                 else:
                     print("❌ 续期失败（5次尝试均未成功）")
-                    send_telegram_message(f"❌ Openworld VPS 续期失败：5次验证码尝试均未成功\n实例: {target_url}")
+                    send_telegram_message(f"❌ Openworld VPS 续期失败：5次验证码尝试均未成功\n实例: {target_url}\n{status_text_tg}")
 
         except Exception as e:
             print(f"\n💥 脚本发生未捕获异常: {e}")
