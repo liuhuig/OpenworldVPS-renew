@@ -536,20 +536,45 @@ def download_captcha_gif(page) -> bytes:
         return None
 
 
+def init_ddddocr():
+    """
+    初始化 ddddocr 实例，并在初始化过程中将 C++ 层面的 stderr (fd 2)
+    重定向到 /dev/null，彻底阻断 ONNX Runtime C++ 底层的 device_discovery 警告日志。
+    """
+    old_stderr_fd = None
+    try:
+        null_fd = os.open(os.devnull, os.O_WRONLY)
+        old_stderr_fd = os.dup(2)
+        os.dup2(null_fd, 2)
+        os.close(null_fd)
+    except Exception:
+        pass
+
+    try:
+        import ddddocr
+        return ddddocr.DdddOcr(show_ad=False)
+    except ImportError:
+        return None
+    finally:
+        if old_stderr_fd is not None:
+            try:
+                os.dup2(old_stderr_fd, 2)
+                os.close(old_stderr_fd)
+            except Exception:
+                pass
+
+
 def try_renew_captcha(page, initial_days: int, max_attempts=5) -> bool:
     """
     尝试执行验证码续期流程，最多重试 max_attempts 次。
     以提交后剩余天数是否增加到 6 天来判断续期是否真正成功。
     返回 True 表示续期成功。
     """
-    try:
-        import ddddocr
-    except ImportError:
+    ocr = init_ddddocr()
+    if not ocr:
         print("   ⚠️ ddddocr 未安装，无法执行验证码识别")
         print("   请运行: pip install ddddocr")
         return False
-
-    ocr = ddddocr.DdddOcr(show_ad=False)
 
     for attempt in range(1, max_attempts + 1):
         print(f"\n   {'='*40}")
@@ -834,21 +859,24 @@ def check_and_handle_vps_status(page) -> str:
             if not clicked:
                 print("   ⚠️ 未能点击 Start 按钮")
 
-            print("   ⏳ 等待 15 秒钟供服务器启动...")
-            time.sleep(15)
+            print("   ⏳ 等待服务器后台启动任务处理（最长等待 30 秒）...")
+            # 轮询等待后台启动 Job 完成 (最长等待 30 秒)
+            job_start_time = time.time()
+            while time.time() - job_start_time < 30:
+                time.sleep(4)
+                try:
+                    page.reload(wait_until="domcontentloaded", timeout=15000)
+                    wait_for_cloudflare(page)
+                except Exception:
+                    pass
+                curr_st = get_vps_status(page)
+                print(f"   📊 刷新后服务器状态: '{curr_st}'")
+                if curr_st == "running":
+                    restarted_ok = True
+                    print(f"   🎉 服务器在第 {start_attempt} 次尝试中成功重启为 Running 状态！")
+                    break
 
-            print("   🔄 刷新页面重新检测服务器状态...")
-            try:
-                page.reload(wait_until="domcontentloaded", timeout=30000)
-                wait_for_cloudflare(page)
-            except Exception as e:
-                print(f"   ⚠️ 刷新页面异常: {e}")
-
-            new_status = get_vps_status(page)
-            print(f"   📊 刷新后服务器状态: '{new_status}'")
-            if new_status == "running":
-                restarted_ok = True
-                print("   🎉 服务器成功重启为 Running 状态！")
+            if restarted_ok:
                 break
 
         if restarted_ok:
