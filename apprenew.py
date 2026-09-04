@@ -301,6 +301,31 @@ def preprocess_frame(img: Image.Image) -> Image.Image:
     return binary
 
 
+def normalize_captcha_number(s: str) -> str:
+    """
+    根据 Openworld 验证码规则修正数字：
+    所有数字最大为 12。如果因为运算符向左/向右偏移被误识别为两位数：
+    - 13 ~ 19 -> 1
+    - 20 ~ 29 -> 2
+    - 30 ~ 39 -> 3
+    - ...
+    - 90 ~ 99 -> 9
+    - > 99 -> 取首位数字
+    - <= 12 -> 保持原样 (0~12)
+    """
+    if not s or not s.isdigit():
+        return s
+    val = int(s)
+    if val <= 12:
+        return str(val)
+    elif 13 <= val <= 19:
+        return "1"
+    elif 20 <= val <= 99:
+        return str(val // 10)
+    else:
+        return s[0]
+
+
 def recognize_captcha_by_frames(gif_bytes: bytes, ocr) -> str:
     """
     分解帧识别验证码：
@@ -350,6 +375,8 @@ def recognize_captcha_by_frames(gif_bytes: bytes, ocr) -> str:
                 s = s.replace('g', '9').replace('q', '9')
                 s = s.replace('>', '7')
                 res_clean = re.sub(r'[^0-9]', '', s)
+                if res_clean:
+                    res_clean = normalize_captcha_number(res_clean)
             else:
                 # 运算符 region：匹配 + - * / (含 + 上半部分/倒立T字符/模糊符提取)
                 res_clean = ""
@@ -372,13 +399,16 @@ def recognize_captcha_by_frames(gif_bytes: bytes, ocr) -> str:
     def pick_best_num(cand_list):
         if not cand_list:
             return ""
-        two_digits = [c for c in cand_list if len(c) == 2]
+        norm_list = [normalize_captcha_number(c) for c in cand_list if c]
+        if not norm_list:
+            return ""
+        two_digits = [c for c in norm_list if len(c) == 2]
         if two_digits:
             return Counter(two_digits).most_common(1)[0][0]
-        return Counter(cand_list).most_common(1)[0][0]
+        return Counter(norm_list).most_common(1)[0][0]
 
-    num_a = pick_best_num(left_candidates)
-    num_b = pick_best_num(right_candidates)
+    num_a = normalize_captcha_number(pick_best_num(left_candidates))
+    num_b = normalize_captcha_number(pick_best_num(right_candidates))
 
     # 运算符决策：优先匹配出现的 + / * / -，若没识别出来则按用户指示默认减法 "-"
     if "*" in op_candidates and op_candidates.count("*") >= 2:
@@ -421,6 +451,8 @@ def recognize_captcha_by_frames(gif_bytes: bytes, ocr) -> str:
         match = re.search(r'(\d+)\s*([+\-*/])\s*(\d+)', most_common_full)
         if match:
             a, o, b = match.groups()
+            a = normalize_captcha_number(a)
+            b = normalize_captcha_number(b)
             val = int(eval(f"{a}{o}{b}"))
             print(f"   🧮 全图统计求解: {a}{o}{b} = {val}")
             return str(val)
@@ -859,10 +891,10 @@ def check_and_handle_vps_status(page) -> str:
             if not clicked:
                 print("   ⚠️ 未能点击 Start 按钮")
 
-            print("   ⏳ 等待服务器后台启动任务处理（最长等待 50 秒）...")
-            # 轮询等待后台启动 Job 完成 (最长等待 50 秒，每 8 秒刷新检测一次)
+            print("   ⏳ 等待服务器后台启动任务处理（最长等待 60 秒）...")
+            # 轮询等待后台启动 Job 完成 (最长等待 60 秒，每 8 秒刷新检测一次)
             job_start_time = time.time()
-            while time.time() - job_start_time < 50:
+            while time.time() - job_start_time < 60:
                 time.sleep(8)
                 try:
                     page.reload(wait_until="domcontentloaded", timeout=15000)
@@ -1019,9 +1051,9 @@ def main():
                     # 计算续期后的到期时间（当前时间 + 6天）
                     expiry_time = datetime.now(timezone(timedelta(hours=8))) + timedelta(days=6)
                     expiry_str = expiry_time.strftime("%Y-%m-%d %H:%M:%S") + " (GMT+8)"
-                    msg = f"✅ Openworld VPS 续期成功！\n实例: {target_url}\n{status_text_tg}\n天数已从 {days_left} 天更新为 6 天\n续期至: {expiry_str}"
+                    msg = f"✅ Openworld VPS 续期成功！\n实例: {target_url}\n{status_text_tg}\n天数已从 {days_left} 天更新为 6 天\n已续期至: {expiry_str}"
                     print(f"✅ 续期成功！天数已从 {days_left} 天更新为 6 天")
-                    print(f"📅 续期至: {expiry_str}")
+                    print(f"📅 已续期至: {expiry_str}")
                     send_telegram_message(msg)
                 else:
                     print("❌ 续期失败（5次尝试均未成功）")
