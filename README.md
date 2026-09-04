@@ -1,5 +1,5 @@
 # 🚀 Openworld Free IPv6 VPS 自动续期脚本
-# 🌟🌟🌟既然来了，就留下你的Star吧！🌟🌟🌟
+## 🌟🌟🌟既然来了，就留下你的Star吧！🌟🌟🌟
 
 基于 GitHub Actions 的 **Openworld Free IPv6 VPS** 全自动续期工具。采用 Playwright 自动化技术 + 智能 Discord OAuth 授权 + 多帧 GIF 动态验证码解析，实现无须人工干预的永久续期。
 
